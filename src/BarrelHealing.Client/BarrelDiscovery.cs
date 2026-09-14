@@ -5,81 +5,165 @@ using UnityEngine;
 namespace BarrelHealing.Client
 {
     /// <summary>
-    /// Finds the burning barrels once, when the raid starts.
+    /// Finds the fires near the player, cheaply, on a timer.
     ///
-    /// There is no burning-barrel class to look for -- nothing in Assembly-CSharp
-    /// describes one, so a barrel is a mesh, a particle system and a light with no
-    /// script of its own. docs/barrels.md's AssetRipper research claimed the shipped
-    /// assets never call it `barrel` -- that was wrong, just under-sampled: the first
-    /// raid test (2026-09-14, Shoreline) found the real, actually-instantiated root
-    /// named `barrel_fire_wfire`, under a parent folder literally called `barrels`.
-    /// `bonfire`/`brazier` are kept in the pattern since they came from a real (if
-    /// unconfirmed-live) asset dump, but `barrel_fire` is the one seen working.
+    /// **Three designs in, so the reasoning is worth keeping.** v0.1 scanned the whole scene
+    /// once at raid start: found nothing, because EFT streams these props in as the player
+    /// approaches and none of them exist yet at spawn. The fix for that rescanned the whole
+    /// scene every two seconds, which worked and cost a visible frame spike every two seconds
+    /// -- `FindObjectsOfType` walks every object in an EFT map, and an EFT map is enormous.
     ///
-    /// **Starting from the particle systems and lights is what filters out the unlit
-    /// ones.** A lit bonfire owns `TorchFire`, `barrel_fire_smoke` and
-    /// `barrel_fire_heat` children; an unlit one is `model`, `model_lod` and `shadow`
-    /// and nothing else, so it has no emitter to be found by and never reaches this
-    /// list. Searching the scene for the name instead would collect both and heal the
-    /// player at a cold barrel.
+    /// The global scan was never needed. Healing happens within `Heal radius` (3m by default),
+    /// so a fire 400m away is irrelevant until the player is next to it, and by then a local
+    /// query will have found it. `Physics.OverlapSphereNonAlloc` is spatially indexed, returns
+    /// a handful of colliders within a few metres, and allocates nothing.
+    ///
+    /// Positions, once found, are kept: the prop is still physically there even after it is
+    /// culled away again, so a barrel stays a heal source once the player has been near it.
     /// </summary>
     internal static class BarrelDiscovery
     {
-        internal static List<Vector3> Find()
-        {
-            var log = BarrelHealingPlugin.Log;
-            var found = new List<Vector3>();
+        // Two fires closer together than this are the same fire. Identity is by position, not
+        // by Transform: a pooled prop can be destroyed and come back as a different object.
+        private const float SamePlaceTolerance = 0.5f;
 
-            Regex pattern;
-            try
+        // Reused between scans, so a scan allocates nothing at all. Sized well beyond what a
+        // few metres of any real map returns; a saturated buffer is reported rather than
+        // silently truncating the search.
+        private const int MaxColliders = 512;
+        private static readonly Collider[] Buffer = new Collider[MaxColliders];
+
+        private static bool _warnedSaturated;
+
+        /// <summary>
+        /// The most recent lit fire seen, kept as the donor to clone flames from when the
+        /// player lights a cold barrel. A consequence of scanning locally instead of globally:
+        /// the mod only knows about fires it has been near, so lighting a barrel requires
+        /// having passed a burning one earlier in the raid.
+        /// </summary>
+        internal static Transform LastLitRoot { get; private set; }
+
+        internal static void Reset()
+        {
+            _warnedSaturated = false;
+            LastLitRoot = null;
+        }
+
+        /// <summary>
+        /// One spatial query, classifying everything it finds. Lit fires are appended to
+        /// <paramref name="lit"/> (deduped against what is already known); unlit ones are
+        /// written to <paramref name="unlit"/>, which is cleared first since those are only
+        /// of interest while the player is stood near them.
+        /// </summary>
+        internal static void ScanNear(Vector3 origin, List<Vector3> lit, List<Transform> unlit)
+        {
+            unlit.Clear();
+
+            Regex healPattern, lightPattern;
+
+            if (!TryPattern(BarrelHealingPlugin.BarrelNamePattern.Value, out healPattern)
+                || !TryPattern(BarrelHealingPlugin.LightableBarrelNamePattern.Value, out lightPattern))
             {
-                pattern = new Regex(BarrelHealingPlugin.BarrelNamePattern.Value, RegexOptions.IgnoreCase);
+                return;
             }
-            catch (System.ArgumentException ex)
+
+            var radius = BarrelHealingPlugin.ScanRadius.Value;
+            var count = Physics.OverlapSphereNonAlloc(origin, radius, Buffer, ~0, QueryTriggerInteraction.Collide);
+
+            if (count >= MaxColliders && !_warnedSaturated)
             {
-                log.LogError("[BarrelHealing] barrel name pattern will not compile, finding nothing: " + ex.Message);
-                return found;
+                _warnedSaturated = true;
+                BarrelHealingPlugin.Log.LogWarning(
+                    $"[BarrelHealing] scan buffer full ({MaxColliders}) -- a fire could be missed here. "
+                    + "Lower the scan radius if this recurs.");
             }
 
             var claimed = new HashSet<Transform>();
 
-            // includeInactive: true is load-bearing, not defensive. EFT culls these fire props
-            // until the player is near one, and FindObjectsOfType excludes inactive objects by
-            // default -- so this one-shot raid-start scan ran with every fire on the map
-            // deactivated and found nothing at all (first raid test, 2026-09-14). An inactive
-            // particle system still has a valid transform.position, which is all this needs.
-            foreach (var particles in UnityEngine.Object.FindObjectsOfType<ParticleSystem>(true))
+            for (var i = 0; i < count; i++)
             {
-                Consider(particles.transform, pattern, claimed, found);
-            }
+                var collider = Buffer[i];
 
-            foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>(true))
-            {
-                Consider(light.transform, pattern, claimed, found);
-            }
+                if (collider == null)
+                {
+                    continue;
+                }
 
-            log.LogInfo($"[BarrelHealing] found {found.Count} fire object(s) in this raid");
-            return found;
+                Consider(collider.transform, healPattern, lightPattern, claimed, lit, unlit);
+            }
         }
 
-        private static void Consider(Transform transform, Regex pattern, HashSet<Transform> claimed, List<Vector3> found)
+        private static void Consider(
+            Transform transform,
+            Regex healPattern,
+            Regex lightPattern,
+            HashSet<Transform> claimed,
+            List<Vector3> lit,
+            List<Transform> unlit)
         {
-            var match = TransformNameMatch.MatchingAncestor(transform, pattern);
+            var match = TransformNameMatch.MatchingAncestor(transform, healPattern)
+                ?? TransformNameMatch.MatchingAncestor(transform, lightPattern);
 
-            if (match == null)
+            if (match == null || !claimed.Add(match))
             {
                 return;
             }
 
-            // One barrel is a light and several particle systems under a shared parent.
-            // Claiming the matched ancestor collapses those into a single position.
-            if (!claimed.Add(match))
+            // Lit or cold is decided by whether there is a fire under it, not by the name --
+            // the same prop name covers both. includeInactive because a culled fire is still
+            // a fire. This is a small local subtree walk, not a scene scan.
+            var burning = match.GetComponentInChildren<ParticleSystem>(true) != null;
+
+            if (!burning)
             {
+                if (lightPattern.IsMatch(match.name))
+                {
+                    unlit.Add(match);
+                }
+
                 return;
             }
 
-            found.Add(match.position);
-            BarrelHealingPlugin.Log.LogInfo($"[BarrelHealing]   {TransformNameMatch.PathOf(match)} @ {match.position}");
+            LastLitRoot = match;
+
+            var position = match.position;
+
+            foreach (var seen in lit)
+            {
+                if (Vector3.Distance(seen, position) <= SamePlaceTolerance)
+                {
+                    return;
+                }
+            }
+
+            lit.Add(position);
+            BarrelHealingPlugin.Log.LogInfo($"[BarrelHealing] found fire: {TransformNameMatch.PathOf(match)} @ {position}");
+        }
+
+        // Compiled once and reused. This runs every second against every collider nearby, so
+        // rebuilding a Regex per scan was pure waste; the cached copy is rebuilt only if the
+        // config string is edited mid-raid.
+        private static readonly Dictionary<string, Regex> PatternCache = new Dictionary<string, Regex>();
+
+        private static bool TryPattern(string source, out Regex pattern)
+        {
+            if (PatternCache.TryGetValue(source, out pattern))
+            {
+                return pattern != null;
+            }
+
+            try
+            {
+                pattern = new Regex(source, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            }
+            catch (System.ArgumentException ex)
+            {
+                BarrelHealingPlugin.Log.LogError("[BarrelHealing] name pattern will not compile: " + ex.Message);
+                pattern = null;
+            }
+
+            PatternCache[source] = pattern;
+            return pattern != null;
         }
     }
 }

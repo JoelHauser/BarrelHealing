@@ -94,7 +94,12 @@ namespace BarrelHealing.Client
                     continue;
                 }
 
-                Object.Instantiate(child.gameObject, target.transform, worldPositionStays: false);
+                var clone = Object.Instantiate(child.gameObject, target.transform, worldPositionStays: false);
+
+                // The donor may itself have been culled to inactive when it was cloned, and a
+                // clone inherits that -- an invisible fire that heals you would be worse than
+                // no fire at all.
+                clone.SetActive(true);
             }
 
             if (consumed)

@@ -28,8 +28,7 @@ namespace BarrelHealing.Client
         internal static ConfigEntry<string> LightableBarrelNamePattern;
         internal static ConfigEntry<float> IgnitionColliderRadius;
 
-        // Temporary, see BarrelDiagnostics.cs.
-        internal static ConfigEntry<float> DiagnosticDumpRadius;
+        internal static ConfigEntry<float> ScanRadius;
 
         private void Awake()
         {
@@ -73,10 +72,12 @@ namespace BarrelHealing.Client
             EnvironmentLayerMask = Config.Bind(
                 "Discovery",
                 "Line-of-sight layer mask",
-                -1,
-                "Layers the wall check raycasts against, as a bitmask. -1 is every layer, which "
-                + "is deliberately blunt: narrow it once you know which layer the map geometry "
-                + "is actually on.");
+                0,
+                "Layers the wall check raycasts against, as a bitmask. 0 means ask the game for "
+                + "its own terrain+high-poly collision mask, which is what EFT uses for sight "
+                + "checks and is almost certainly what you want. The old default of -1 meant "
+                + "every layer, so a trigger volume, a loot collider or the fire's own heat "
+                + "volume counted as a wall and blocked healing at a barrel in plain sight.");
 
             LightableBarrelNamePattern = Config.Bind(
                 "Ignition",
@@ -94,14 +95,15 @@ namespace BarrelHealing.Client
                 "Radius, in metres, of the interaction collider placed on an unlit bonfire so the "
                 + "vanilla look-and-press prompt has something to raycast against.");
 
-            DiagnosticDumpRadius = Config.Bind(
-                "Diagnostics",
-                "Diagnostic dump radius",
-                10f,
-                "Temporary. While no fire was found this raid, logs every ParticleSystem/Light "
-                + "within this many metres of the player every 5 seconds, so the real prop name "
-                + "on maps docs/barrels.md didn't already confirm can be read out of the log "
-                + "instead of guessed again.");
+            ScanRadius = Config.Bind(
+                "Discovery",
+                "Scan radius",
+                8f,
+                "How far around the player to look for fires, in metres, once a second. This is "
+                + "a physics overlap query rather than a scene-wide search, so its cost scales "
+                + "with what is actually nearby -- keep it near the heal radius. Raising it a "
+                + "long way makes the query return more and eventually costs frame time, which "
+                + "is exactly what the scene-wide version used to do.");
 
             StartCoroutine(BarrelHeartbeat.Run());
 

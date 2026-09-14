@@ -19,6 +19,10 @@ namespace BarrelHealing.Client
         private const float TickInterval = 0.5f;
         private const float IdleInterval = 1f;
 
+        // How often the local scan runs. This is an OverlapSphere over a few metres, not a
+        // scene sweep -- see BarrelDiscovery for why that distinction cost a rewrite.
+        private const float ScanInterval = 1f;
+
         internal static IEnumerator Run()
         {
             var idle = new WaitForSeconds(IdleInterval);
@@ -32,10 +36,14 @@ namespace BarrelHealing.Client
                     continue;
                 }
 
-                List<Vector3> barrels = BarrelDiscovery.Find();
-                List<BonfireSwitch> unlit = PrepareIgnition(barrels);
+                BarrelDiscovery.Reset();
+                HealingTick.Reset();
+
+                var barrels = new List<Vector3>();
+                var unlitNearby = new List<Transform>();
+                var prompts = new List<BonfireSwitch>();
                 var timer = 0f;
-                var diagnosticTimer = 0f;
+                var scanTimer = ScanInterval;
 
                 while (InRaid())
                 {
@@ -46,16 +54,24 @@ namespace BarrelHealing.Client
                         break;
                     }
 
-                    timer = HealingTick.Update(barrels, timer, TickInterval);
-                    RefreshIgnitionPrompts(unlit);
+                    var player = Singleton<GameWorld>.Instance?.MainPlayer;
 
-                    // Temporary, see BarrelDiagnostics.cs: found 0 fire objects on a map with
-                    // one the player was standing at, so something about the name/depth
-                    // assumption is wrong somewhere docs/barrels.md didn't already check.
-                    if (barrels.Count == 0)
+                    if (player == null)
                     {
-                        BarrelDiagnostics.Tick(ref diagnosticTimer, TickInterval);
+                        continue;
                     }
+
+                    scanTimer += TickInterval;
+
+                    if (scanTimer >= ScanInterval)
+                    {
+                        scanTimer = 0f;
+                        BarrelDiscovery.ScanNear(player.Position, barrels, unlitNearby);
+                        PrepareIgnition(unlitNearby, prompts, barrels);
+                    }
+
+                    timer = HealingTick.Update(barrels, timer, TickInterval);
+                    RefreshIgnitionPrompts(prompts);
                 }
 
                 // Raid over: the caches and the timer go out of scope with this iteration.
@@ -101,29 +117,37 @@ namespace BarrelHealing.Client
         }
 
         /// <summary>
-        /// One-time-per-raid setup: find the unlit bonfires, give each a Light prompt, and
-        /// wire it so lighting one drops its position straight into the same list HealingTick
-        /// already polls -- a freshly lit fire starts healing on the very next tick, no
-        /// separate discovery pass needed.
+        /// Gives every newly streamed-in unlit bonfire a Light prompt, and wires it so
+        /// lighting one drops its position straight into the same list HealingTick already
+        /// polls -- a freshly lit fire starts healing on the very next tick.
+        ///
+        /// Runs on every rediscovery pass, not once: unlit bonfires appear as the player
+        /// approaches them, exactly like the lit ones (see BarrelDiscovery). Already-prepared
+        /// roots are skipped by checking for the component this added last time.
         /// </summary>
-        private static List<BonfireSwitch> PrepareIgnition(List<Vector3> barrels)
+        private static void PrepareIgnition(List<Transform> unlitNearby, List<BonfireSwitch> switches, List<Vector3> barrels)
         {
-            var discovery = BonfireDiscovery.Find();
-            var switches = new List<BonfireSwitch>();
+            var donor = BarrelDiscovery.LastLitRoot;
 
-            if (discovery.Donor == null)
+            // No burning fire seen yet this raid, so there is nothing to copy flames from.
+            if (donor == null)
             {
-                return switches;
+                return;
             }
 
-            foreach (var unlitRoot in discovery.Unlit)
+            foreach (var unlitRoot in unlitNearby)
             {
-                var bonfireSwitch = BonfireIgnition.Prepare(unlitRoot, discovery.Donor);
+                if (unlitRoot.GetComponent<BonfireSwitch>() != null)
+                {
+                    continue;
+                }
+
+                var bonfireSwitch = BonfireIgnition.Prepare(unlitRoot, donor);
                 bonfireSwitch.OnLit = () => barrels.Add(bonfireSwitch.transform.position);
                 switches.Add(bonfireSwitch);
+                BarrelHealingPlugin.Log.LogInfo(
+                    $"[BarrelHealing] Light prompt attached to {TransformNameMatch.PathOf(unlitRoot)} @ {unlitRoot.position}");
             }
-
-            return switches;
         }
 
         /// <summary>

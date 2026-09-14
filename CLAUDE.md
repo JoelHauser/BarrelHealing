@@ -55,18 +55,40 @@ mask.
 
 ## What was read out of the game, and is therefore true
 
-All by reflection against `C:\HUH\EscapeFromTarkov_Data\Managed\Assembly-CSharp.dll`
+All by reflection against `EscapeFromTarkov_Data\Managed\Assembly-CSharp.dll`
 (15,094 types resolved once a dependency resolver is attached -- without one you
-get ~2,800 and silently miss almost everything).
+get ~2,800 and silently miss almost everything). `ilspycmd` is installed and on
+PATH, which is faster than a reflection harness for reading a method *body*.
 
-- `EFT.HealthSystem.ActiveHealthController.Heal(EBodyPart, float)` -- and
-  `Player.ActiveHealthController` is typed as the **concrete class**, not
-  `IHealthController`, so no cast is needed. `Heal` is *not* on the interface.
+> **`ActiveHealthController.Heal(EBodyPart, float)` IS AN EMPTY STUB. Do not use
+> it.** Its entire body in this build is `{ }`. It exists, it is public, it takes
+> exactly the arguments you want, it compiles, it runs -- and it changes nothing.
+> An earlier version of this file listed it here as verified, because it had been
+> confirmed to *exist*. Nobody read the body. It cost a raid where the log
+> cheerfully printed `healing LeftLeg -> 63/65` forty-six times without the number
+> ever moving.
+>
+> **Existence is not behavior.** For anything this mod actually depends on, read
+> the decompiled body, not just the signature.
+
+The real health API:
+
+- **`ActiveHealthController.ChangeHealth(EBodyPart, float value, DamageInfo)`** --
+  positive `value` heals. It clamps to the limb's maximum itself (the
+  `HealthValue.Current` setter does a `Mathf.Clamp`), skips destroyed limbs and
+  dead players on its own, and does the `NetworkSyncBodyHealth` +
+  `HealthChangedEvent` work that makes the UI and the rest of the game notice.
+  `DamageInfo` is `EFT.Ballistics.DamageInfo`, a struct, so `default` is fine --
+  it is only passed through to the event.
+- `FullRestoreBodyPart` / `RestoreBodyPart` exist for destroyed limbs.
+  `BaseHealthController.BodyState` is a public
+  `Dictionary<EBodyPart, BodyPartState>` if raw access is ever needed.
+- `Player.ActiveHealthController` is typed as the **concrete class**, not
+  `IHealthController`, so no cast is needed.
 - `IsBodyPartDestroyed(EBodyPart)`, `IsBodyPartBroken(EBodyPart)`, and
   `GetBodyPartHealth(EBodyPart, bool rounded = ...)` returning
   `EFT.HealthSystem.ValueStruct` (`Current`/`Maximum`/`Normalized`/`AtMaximum`).
-  These are inherited from an obfuscated generic base whose name is unwritable,
-  but they are public, so C# reaches them through the derived type fine.
+  These work -- confirmed in a raid, not just by signature.
 - `EBodyPart` is in the **global namespace**, not `EFT`. Head, Chest, Stomach,
   LeftArm, RightArm, LeftLeg, RightLeg, Common.
 - `EFT.GameWorld.MainPlayer` (field), `Player.Position`, `Player.CameraPosition`.
@@ -75,7 +97,7 @@ get ~2,800 and silently miss almost everything).
 
 **Destroyed limbs are skipped and never restored** -- that needs
 `RestoreBodyPart`, which a barrel is not. Bleeds and fractures are untouched:
-`Heal` only raises raw body-part HP.
+`ChangeHealth` only raises raw body-part HP.
 
 ## Things that cost time, written down so they cost it once
 
@@ -105,12 +127,21 @@ are **`bonfire`** and **`brazier`**. `campfire`, `burning`, `firepit`, `bochka`
 and `kostyor` match *nothing at all*. Full detail, including per-map counts, is
 in `docs/barrels.md`.
 
-**Discovery starts from particle systems on purpose.** A lit bonfire owns
-`TorchFire`, `barrel_fire_smoke` and `barrel_fire_heat` children; an unlit one is
-`model`, `model_lod`, `shadow` and nothing else. Starting the scan from emitters
-is what makes it impossible to collect a cold barrel and heal the player at it.
-Searching by name alone would collect both. There is **no `Light` component on
-either** -- these fires are particles only.
+**Lit vs cold is decided by whether a `ParticleSystem` hangs under the prop**,
+not by its name -- the same name covers both states. `GetComponentInChildren
+<ParticleSystem>(true)` on the matched root, with `includeInactive: true`,
+because a culled fire is still a fire. That check is a small local subtree walk,
+which is why it is affordable inside the per-second scan.
+
+**Never scan the scene to find them.** See the three-designs note in
+`BarrelDiscovery.cs`: `FindObjectsOfType` over an EFT map costs a visible frame
+spike, and it was never necessary, because healing only happens within a few
+metres. `Physics.OverlapSphereNonAlloc` around the player does the same job for
+almost nothing. Two consequences worth knowing: props are **not in the scene at
+raid start at all** (EFT streams them in as the player nears, so a one-shot scan
+at spawn finds zero no matter what), and the mod only knows about fires it has
+been near -- which is why lighting a cold barrel needs a burning one to have
+been passed earlier in the raid.
 
 **Tooling, on this box:** Git Bash chokes on large files -- a `grep -c` over a
 17MB HTML file times out at 60s where PowerShell regex does it instantly. Use
@@ -119,23 +150,28 @@ PowerShell, so it cannot be a loop variable.
 
 ## Where this was left off
 
-v0.1 and v0.2 are both built and installed to
-`H:\SPT4.1.X\BepInEx\plugins\BarrelHealing` (moved here from the original
-`C:\HUH` box). Neither has run in a raid yet.
+**v0.1 healing WORKS, confirmed in a raid on 2026-09-14** -- Shoreline, health
+climbing limb by limb, worst first, no frame cost. That took five raid tests and
+four separate bugs; they are all written up under "Four bugs, and what each one
+should teach" below, because every one of them was a wrong *assumption* that a
+clean build and a plausible log had hidden.
 
-**v0.2, lightable bonfires, is implemented** -- walk up to an unlit bonfire,
-get a **Light** prompt, light it, and it joins `BarrelHeartbeat`'s healing list
-immediately (no second discovery pass needed; see `BonfireSwitch.OnLit`).
+v0.2 (lightable bonfires) is implemented and installed but **has never had its
+prompt seen in a raid.** Walk up to an unlit bonfire, get a **Light** prompt,
+light it, and it joins the healing list immediately (`BonfireSwitch.OnLit`).
 Decisions from the original spec, kept:
 
 - The button is greyed out unless the player carries a lighter or matches
   (`BarrelHeartbeat.RefreshIgnitionPrompts`, polled every 0.5s, not per-frame).
 - A player-lit fire **burns you**, like a vanilla one -- `trigger_hurt_fire`
-  is cloned along with the three particle children, since `BonfireIgnition`
-  clones everything under the donor except its own `model`/`model_lod`/`shadow`.
+  is cloned along with the particle children, since `BonfireIgnition` clones
+  everything under the donor except its own `model`/`model_lod`/`shadow`.
 - **Matches are consumed, lighters are not.** Lighter preferred when both carried.
-- On a map with no lit bonfire to copy from, `BonfireDiscovery` finds no donor,
-  no Switch is ever attached, and the log says why.
+- With no burning fire seen yet this raid there is no donor, so no Switch is
+  attached and no prompt appears.
+
+Note the **install is SPT 4.1.5**, not 4.1.3 as this file long claimed --
+read out of `SPT_Runtime\user\logs\Launcher.log` (`server version: 4.1.5`).
 
 ### How the "Light" prompt actually works (no Harmony, verified by decompile)
 
@@ -197,43 +233,63 @@ entirely. `BonfireIgnition.TryLight` calls
 Whether a client-side removal survives to the stash through SPT's end-of-raid
 profile save is still unverified -- that part needs an actual raid.
 
-### The first raid happened (2026-09-14, Shoreline), and found two real bugs
+## Four bugs, and what each one should teach
 
-Nothing healed. Both causes are fixed but **the fix itself is not yet
-raid-confirmed** -- that is the next thing to check.
+Getting v0.1 from "builds clean" to "actually heals" took five raid tests. Every
+failure looked identical from inside the game -- nothing happens -- and every one
+had a different cause. All four were wrong assumptions inherited from static
+analysis, not coding mistakes, which is why they survived a clean build.
 
-**1. The prop names in `docs/barrels.md` were wrong.** Not subtly: the real
-objects a player walks up to on Shoreline are `barrel_fire_wfire` and
-`barrel_fire` (`barrel_fire (3)` after Unity's duplicate suffix), parented under
-a transform called `barrels` in scene `SBG_Shoreline_Light`. The doc had
-explicitly ruled `barrel` out after sampling a handful of the 41,426 name hits
-and finding only weapon parts. `BarrelNamePattern` is now
-`bonfire|brazier|barrel_fire`. That correction is recorded at the top of
-docs/barrels.md too.
+**1. The prop names in `docs/barrels.md` were wrong.** The real objects on
+Shoreline are `barrel_fire_wfire` and `barrel_fire` (`barrel_fire (3)` after
+Unity's duplicate suffix), under a transform called `barrels` in scene
+`SBG_Shoreline_Light`. The doc had explicitly ruled `barrel` out after sampling a
+handful of its 41,426 name hits, finding weapon parts, and generalising.
+*Lesson: a name search returning tens of thousands of hits has not been checked
+by sampling five of them.*
 
-**2. The real bug: `FindObjectsOfType<T>()` excludes inactive objects.** EFT
-deactivates these fire props until the player is near one. Discovery runs once,
-at raid start, when the player is at spawn and therefore every fire on the map
-is deactivated -- so it found nothing no matter what the name pattern said. The
-log signature was unmistakable once the diagnostic was in: `0 ParticleSystem/
-Light within 10m` for roughly fifty seconds while running from spawn, then six
-hits the moment the player arrived at the barrel. Every `FindObjectsOfType` and
-`GetComponentInChildren` in this mod now passes `includeInactive: true`; an
-inactive particle system still has a valid `transform.position`, which is all
-discovery reads.
+**2. The props do not exist at raid start.** EFT streams them in as the player
+approaches. A one-shot scan at spawn finds zero, forever, whatever the pattern
+says. `includeInactive: true` was tried first and did not fix it, which is what
+ruled out "present but merely deactivated" and proved they are genuinely absent.
+*Lesson: in EFT, "the scene at raid start" is not the scene.*
 
-This one is worth remembering beyond this mod: **any scene scan done at raid
-start in EFT has to opt into inactive objects**, or it only sees whatever
-happens to be near the player's spawn.
+**3. Line of sight rejected every fire.** The layer mask was `-1`, every layer,
+so the ray was stopped by trigger volumes, loot colliders and the fire's own heat
+volume -- none of which are walls. Compounding it, many discovered positions are
+the flame particle *inside* the drum, so the ray hits the barrel's own shell
+before the endpoint and the 0.5m slack was too tight to forgive it. Now uses the
+game's own terrain+high-poly mask (config `0` = ask the game) and 1m of slack.
+*Lesson: "every layer" is not a neutral default, it is the most hostile one.*
 
-`BarrelDiagnostics.cs` is the temporary logger that found this -- it dumps every
-ParticleSystem/Light near the player every 5s while zero fires were discovered.
-Delete it once discovery is confirmed working.
+**4. `ActiveHealthController.Heal()` is an empty stub.** Covered in full further
+up. The log printed `healing LeftLeg -> 63/65` forty-six times while the number
+never moved. Real API is `ChangeHealth(EBodyPart, float, DamageInfo)`.
+*Lesson: existence is not behavior -- read the body.*
 
-**Still unchecked, in order:** does discovery now log `found N fire object(s)`
-with N > 0 at raid start; does standing at a lit barrel actually heal; does the
-Light prompt appear on an unlit one (no unlit live instance has been inspected
-yet -- see the docs/barrels.md correction, the "unlit barrels have no fire
-children at all" claim is still just an assumption from a dev scene); does
-pressing it clone the fire somewhere sane; does a match leave the inventory and
-stay gone through end-of-raid save.
+**And one performance mistake worth not repeating:** the fix for bug 2 was a
+scene-wide `FindObjectsOfType` rescan every 2 seconds. It worked, and it cost a
+visible frame spike every 2 seconds in a shipped-to-the-user build. The scan was
+never needed at any range beyond the heal radius. See `BarrelDiscovery.cs`.
+
+**The diagnostic that cracked it** logged every ParticleSystem/Light near the
+player with full transform paths, every few seconds. Two of the four bugs were
+invisible until live transform paths could be compared against the assumed ones.
+It has been deleted now that discovery works, but *re-adding something like it is
+the first move next time this mod "does nothing"* -- it converts silence into
+evidence, which is the entire difficulty here.
+
+### Still unverified
+
+Everything in v0.2. The Light prompt has never been seen in a raid, and it rests
+on assumptions of exactly the kind the four bugs above punished:
+
+- **No unlit bonfire has ever been inspected live.** "Unlit props have no fire
+  children at all" comes from the same dev-scene sample that got the names wrong.
+  If cold barrels turn out to carry disabled fire children instead, the lit/cold
+  test is inverted and every cold barrel reads as lit.
+- **The ignition collider** (`isTrigger = true` on `DoorLowPolyCollider`) is
+  inference from naming convention, not a decompiled guarantee. If no prompt
+  appears, check this first: try `isTrigger = false`, and confirm that layer is
+  really in `_interactiveLootMaskWPlayer`.
+- **Whether a consumed match stays gone** through SPT's end-of-raid profile save.
