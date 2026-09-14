@@ -10,8 +10,15 @@ namespace BarrelHealing.Client
     ///
     /// There is no burning-barrel class to look for -- nothing in Assembly-CSharp
     /// describes one, so a barrel is a mesh, a particle system and a light with no
-    /// script of its own. Names are all there is to go on, which is why every match
-    /// is logged: the first raid on a map is how the pattern gets tuned.
+    /// script of its own. The shipped assets call it `bonfire` (and `brazier`), never
+    /// `barrel`; see docs/barrels.md.
+    ///
+    /// **Starting from the particle systems and lights is what filters out the unlit
+    /// ones.** A lit bonfire owns `TorchFire`, `barrel_fire_smoke` and
+    /// `barrel_fire_heat` children; an unlit one is `model`, `model_lod` and `shadow`
+    /// and nothing else, so it has no emitter to be found by and never reaches this
+    /// list. Searching the scene for the name instead would collect both and heal the
+    /// player at a cold barrel.
     /// </summary>
     internal static class BarrelDiscovery
     {

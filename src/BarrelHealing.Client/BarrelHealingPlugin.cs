@@ -54,11 +54,11 @@ namespace BarrelHealing.Client
             BarrelNamePattern = Config.Bind(
                 "Discovery",
                 "Barrel name pattern",
-                "barrel|bochka|fire",
+                "bonfire|brazier",
                 "Case-insensitive regex matched against the name of every particle system and "
-                + "light in the raid, and up to three parents above it. This default is a guess: "
-                + "the plugin logs every object it matches at raid start, so read the BepInEx log "
-                + "after a raid and tighten this to what the maps actually call their barrels.");
+                + "light in the raid, and up to three parents above it. These two names were read "
+                + "out of the shipped assets -- see docs/barrels.md. 'barrel' is deliberately not "
+                + "here: it matches 41,000 weapon parts and no scenery at all.");
 
             EnvironmentLayerMask = Config.Bind(
                 "Discovery",
