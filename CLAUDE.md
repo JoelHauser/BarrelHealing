@@ -73,6 +73,17 @@ PATH, which is faster than a reflection harness for reading a method *body*.
 
 The real health API:
 
+- **The HUD up-arrow is a third mechanism again.** `ChangeHealth` moves the
+  number; it does not produce the green `+N` next to the health readout. That
+  reads a *rate* registered through `ChangeHealthRate(oldDelta, newDelta)`,
+  stored **per minute** -- `Effect.SetHealthRatesPerSecond` takes a per-second
+  figure and does `health *= 60f`, so a 3 HP/s barrel correctly displays as
+  `+180`. It is display-only: `HealRate` is read by exactly one property
+  (`HealthRate`) and the network serialiser, and is never applied to a body
+  part, so registering it cannot double-heal. Hand the previously registered
+  value back to clear it (`HealingTick.SetHealRate`) or the arrow strands on
+  the HUD forever. Call `NetworkSyncHealthRates()` after changing it.
+  **Confirmed working in a raid, 2026-09-14.**
 - **`ActiveHealthController.ChangeHealth(EBodyPart, float value, DamageInfo)`** --
   positive `value` heals. It clamps to the limb's maximum itself (the
   `HealthValue.Current` setter does a `Mathf.Clamp`), skips destroyed limbs and
@@ -156,8 +167,13 @@ four separate bugs; they are all written up under "Four bugs, and what each one
 should teach" below, because every one of them was a wrong *assumption* that a
 clean build and a plausible log had hidden.
 
+The HUD heal-rate arrow works too, same raid -- see the health API section.
+
 v0.2 (lightable bonfires) is implemented and installed but **has never had its
-prompt seen in a raid.** Walk up to an unlit bonfire, get a **Light** prompt,
+prompt seen in a raid.** No unlit barrel has come within scan range yet: in the
+confirming raid `Light prompt attached` appeared in the log zero times, so none
+of the ignition path -- detection, prompt, cloning, match consumption -- has
+executed even once. Walk up to an unlit bonfire, get a **Light** prompt,
 light it, and it joins the healing list immediately (`BonfireSwitch.OnLit`).
 Decisions from the original spec, kept:
 
