@@ -28,6 +28,9 @@ namespace BarrelHealing.Client
         internal static ConfigEntry<string> LightableBarrelNamePattern;
         internal static ConfigEntry<float> IgnitionColliderRadius;
 
+        // Temporary, see BarrelDiagnostics.cs.
+        internal static ConfigEntry<float> DiagnosticDumpRadius;
+
         private void Awake()
         {
             Log = Logger;
@@ -57,11 +60,15 @@ namespace BarrelHealing.Client
             BarrelNamePattern = Config.Bind(
                 "Discovery",
                 "Barrel name pattern",
-                "bonfire|brazier",
+                "bonfire|brazier|barrel_fire",
                 "Case-insensitive regex matched against the name of every particle system and "
-                + "light in the raid, and up to three parents above it. These two names were read "
-                + "out of the shipped assets -- see docs/barrels.md. 'barrel' is deliberately not "
-                + "here: it matches 41,000 weapon parts and no scenery at all.");
+                + "light in the raid, and up to three parents above it. 'bonfire'/'brazier' were "
+                + "read out of AssetRipper's asset dump (docs/barrels.md); 'barrel_fire' is what "
+                + "the actually-instantiated prop on Shoreline turned out to be named in the "
+                + "first raid test (2026-09-14) -- AssetRipper's static sample dismissed 'barrel' "
+                + "as 41,000 weapon parts without checking this one. Matching 'barrel' bare is "
+                + "still avoided since this pattern is also matched against ancestor names up to "
+                + "3 levels up, where a stray weapon-part parent could coincidentally qualify.");
 
             EnvironmentLayerMask = Config.Bind(
                 "Discovery",
@@ -86,6 +93,15 @@ namespace BarrelHealing.Client
                 0.6f,
                 "Radius, in metres, of the interaction collider placed on an unlit bonfire so the "
                 + "vanilla look-and-press prompt has something to raycast against.");
+
+            DiagnosticDumpRadius = Config.Bind(
+                "Diagnostics",
+                "Diagnostic dump radius",
+                10f,
+                "Temporary. While no fire was found this raid, logs every ParticleSystem/Light "
+                + "within this many metres of the player every 5 seconds, so the real prop name "
+                + "on maps docs/barrels.md didn't already confirm can be read out of the log "
+                + "instead of guessed again.");
 
             StartCoroutine(BarrelHeartbeat.Run());
 

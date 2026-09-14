@@ -9,8 +9,12 @@ namespace BarrelHealing.Client
     ///
     /// There is no burning-barrel class to look for -- nothing in Assembly-CSharp
     /// describes one, so a barrel is a mesh, a particle system and a light with no
-    /// script of its own. The shipped assets call it `bonfire` (and `brazier`), never
-    /// `barrel`; see docs/barrels.md.
+    /// script of its own. docs/barrels.md's AssetRipper research claimed the shipped
+    /// assets never call it `barrel` -- that was wrong, just under-sampled: the first
+    /// raid test (2026-09-14, Shoreline) found the real, actually-instantiated root
+    /// named `barrel_fire_wfire`, under a parent folder literally called `barrels`.
+    /// `bonfire`/`brazier` are kept in the pattern since they came from a real (if
+    /// unconfirmed-live) asset dump, but `barrel_fire` is the one seen working.
     ///
     /// **Starting from the particle systems and lights is what filters out the unlit
     /// ones.** A lit bonfire owns `TorchFire`, `barrel_fire_smoke` and
@@ -39,12 +43,17 @@ namespace BarrelHealing.Client
 
             var claimed = new HashSet<Transform>();
 
-            foreach (var particles in UnityEngine.Object.FindObjectsOfType<ParticleSystem>())
+            // includeInactive: true is load-bearing, not defensive. EFT culls these fire props
+            // until the player is near one, and FindObjectsOfType excludes inactive objects by
+            // default -- so this one-shot raid-start scan ran with every fire on the map
+            // deactivated and found nothing at all (first raid test, 2026-09-14). An inactive
+            // particle system still has a valid transform.position, which is all this needs.
+            foreach (var particles in UnityEngine.Object.FindObjectsOfType<ParticleSystem>(true))
             {
                 Consider(particles.transform, pattern, claimed, found);
             }
 
-            foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>())
+            foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>(true))
             {
                 Consider(light.transform, pattern, claimed, found);
             }

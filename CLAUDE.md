@@ -197,11 +197,43 @@ entirely. `BonfireIgnition.TryLight` calls
 Whether a client-side removal survives to the stash through SPT's end-of-raid
 profile save is still unverified -- that part needs an actual raid.
 
-### Next: the first raid
+### The first raid happened (2026-09-14, Shoreline), and found two real bugs
 
-Nothing left to design -- what's needed now is actually loading into a raid on
-a map with a bonfire (Shoreline and Lighthouse both have several) and checking,
-in order: does the heal-at-a-lit-fire loop from v0.1 work at all; does the
-Light prompt appear on an unlit one; does pressing it clone the fire in a
-sane-looking position; does the newly lit fire then heal; does a match actually
-disappear from inventory and stay gone after raid end.
+Nothing healed. Both causes are fixed but **the fix itself is not yet
+raid-confirmed** -- that is the next thing to check.
+
+**1. The prop names in `docs/barrels.md` were wrong.** Not subtly: the real
+objects a player walks up to on Shoreline are `barrel_fire_wfire` and
+`barrel_fire` (`barrel_fire (3)` after Unity's duplicate suffix), parented under
+a transform called `barrels` in scene `SBG_Shoreline_Light`. The doc had
+explicitly ruled `barrel` out after sampling a handful of the 41,426 name hits
+and finding only weapon parts. `BarrelNamePattern` is now
+`bonfire|brazier|barrel_fire`. That correction is recorded at the top of
+docs/barrels.md too.
+
+**2. The real bug: `FindObjectsOfType<T>()` excludes inactive objects.** EFT
+deactivates these fire props until the player is near one. Discovery runs once,
+at raid start, when the player is at spawn and therefore every fire on the map
+is deactivated -- so it found nothing no matter what the name pattern said. The
+log signature was unmistakable once the diagnostic was in: `0 ParticleSystem/
+Light within 10m` for roughly fifty seconds while running from spawn, then six
+hits the moment the player arrived at the barrel. Every `FindObjectsOfType` and
+`GetComponentInChildren` in this mod now passes `includeInactive: true`; an
+inactive particle system still has a valid `transform.position`, which is all
+discovery reads.
+
+This one is worth remembering beyond this mod: **any scene scan done at raid
+start in EFT has to opt into inactive objects**, or it only sees whatever
+happens to be near the player's spawn.
+
+`BarrelDiagnostics.cs` is the temporary logger that found this -- it dumps every
+ParticleSystem/Light near the player every 5s while zero fires were discovered.
+Delete it once discovery is confirmed working.
+
+**Still unchecked, in order:** does discovery now log `found N fire object(s)`
+with N > 0 at raid start; does standing at a lit barrel actually heal; does the
+Light prompt appear on an unlit one (no unlit live instance has been inspected
+yet -- see the docs/barrels.md correction, the "unlit barrels have no fire
+children at all" claim is still just an assumption from a dev scene); does
+pressing it clone the fire somewhere sane; does a match leave the inventory and
+stay gone through end-of-raid save.

@@ -35,6 +35,7 @@ namespace BarrelHealing.Client
                 List<Vector3> barrels = BarrelDiscovery.Find();
                 List<BonfireSwitch> unlit = PrepareIgnition(barrels);
                 var timer = 0f;
+                var diagnosticTimer = 0f;
 
                 while (InRaid())
                 {
@@ -47,6 +48,14 @@ namespace BarrelHealing.Client
 
                     timer = HealingTick.Update(barrels, timer, TickInterval);
                     RefreshIgnitionPrompts(unlit);
+
+                    // Temporary, see BarrelDiagnostics.cs: found 0 fire objects on a map with
+                    // one the player was standing at, so something about the name/depth
+                    // assumption is wrong somewhere docs/barrels.md didn't already check.
+                    if (barrels.Count == 0)
+                    {
+                        BarrelDiagnostics.Tick(ref diagnosticTimer, TickInterval);
+                    }
                 }
 
                 // Raid over: the caches and the timer go out of scope with this iteration.

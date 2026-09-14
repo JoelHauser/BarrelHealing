@@ -1,5 +1,32 @@
 # Where the fires actually are, and what they're made of
 
+> **Correction, 2026-09-14 — read this before trusting anything below.** The first
+> in-raid test contradicted this document twice.
+>
+> 1. **The name claim below is wrong.** "None of `barrel` ... appear anywhere in
+>    the loaded asset names" and "'barrel' alone returns 41,426 `GameObject` hits,
+>    but every one sampled is a weapon part" — the operative word was *sampled*.
+>    The real, actually-instantiated props on Shoreline are named
+>    **`barrel_fire_wfire`** and **`barrel_fire`** (Unity-suffixed `barrel_fire (3)`
+>    etc.), sitting under a parent transform literally called **`barrels`**, in
+>    scene `SBG_Shoreline_Light`. Both were found by logging live transform paths
+>    in a raid, not by asset search. `bonfire`/`brazier` may well also exist, but
+>    they are not what a player walks up to on Shoreline.
+> 2. **The lit/unlit distinction below is unverified for these props.** The
+>    `bonfire` vs `bonfire_withfire` pair was read out of `custom_DesignStuff`, an
+>    internal dev scene. Both live props seen so far (`barrel_fire_wfire` and
+>    `barrel_fire (3)`) are *lit* and own particle children, with slightly
+>    different hierarchies from each other (the latter has no `TorchFire`, and its
+>    `Point light`s hang off `barrel_metal`). No unlit live instance has been
+>    inspected yet, so "the unlit one is missing the fire entirely" is still an
+>    assumption carried over from the dev-scene sample.
+>
+> The per-map counts further down were never re-verified after this and should be
+> treated as an AssetRipper artefact, not ground truth. The method at the bottom
+> ("Reproducing this") is still sound; its conclusions were just under-sampled.
+> Note also that the path in it (`C:\HUH`) is the old box -- use `H:\SPT4.1.X`.
+
+
 Extracted statically with AssetRipper 2.0.0 (`winget install AssetRipper.AssetRipper`),
 run headless (`--headless --port 8199`) and driven entirely through its REST/HTML
 API (`POST /LoadFolder` with `C:\HUH\EscapeFromTarkov_Data`, then `/Search/View?q=...`,

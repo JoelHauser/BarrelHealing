@@ -65,7 +65,9 @@ namespace BarrelHealing.Client
             var claimed = new HashSet<Transform>();
             Transform donor = null;
 
-            foreach (var particles in Object.FindObjectsOfType<ParticleSystem>())
+            // includeInactive: true throughout -- EFT culls fire props until the player is
+            // near one, so a raid-start scan without it sees an empty map. See BarrelDiscovery.
+            foreach (var particles in Object.FindObjectsOfType<ParticleSystem>(true))
             {
                 var match = TransformNameMatch.MatchingAncestor(particles.transform, pattern);
 
@@ -83,7 +85,7 @@ namespace BarrelHealing.Client
             var claimed = new HashSet<Transform>();
             var unlit = new List<Transform>();
 
-            foreach (var lodGroup in Object.FindObjectsOfType<LODGroup>())
+            foreach (var lodGroup in Object.FindObjectsOfType<LODGroup>(true))
             {
                 var match = TransformNameMatch.MatchingAncestor(lodGroup.transform, pattern);
 
@@ -93,7 +95,9 @@ namespace BarrelHealing.Client
                 }
 
                 // Already has fire -- BarrelDiscovery already found this one for healing.
-                if (match.GetComponentInChildren<ParticleSystem>() != null)
+                // includeInactive again: a culled fire is still a fire, and missing it here
+                // would offer a Light prompt on a barrel that is already burning.
+                if (match.GetComponentInChildren<ParticleSystem>(true) != null)
                 {
                     continue;
                 }
