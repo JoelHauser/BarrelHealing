@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$SPTPath = "C:\HUH",
+    [string]$SPTPath = "H:\SPT4.1.X",
     [string]$Configuration = "Release"
 )
 

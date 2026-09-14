@@ -33,6 +33,7 @@ namespace BarrelHealing.Client
                 }
 
                 List<Vector3> barrels = BarrelDiscovery.Find();
+                List<BonfireSwitch> unlit = PrepareIgnition(barrels);
                 var timer = 0f;
 
                 while (InRaid())
@@ -45,9 +46,10 @@ namespace BarrelHealing.Client
                     }
 
                     timer = HealingTick.Update(barrels, timer, TickInterval);
+                    RefreshIgnitionPrompts(unlit);
                 }
 
-                // Raid over: the cache and the timer go out of scope with this iteration.
+                // Raid over: the caches and the timer go out of scope with this iteration.
             }
         }
 
@@ -87,6 +89,58 @@ namespace BarrelHealing.Client
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// One-time-per-raid setup: find the unlit bonfires, give each a Light prompt, and
+        /// wire it so lighting one drops its position straight into the same list HealingTick
+        /// already polls -- a freshly lit fire starts healing on the very next tick, no
+        /// separate discovery pass needed.
+        /// </summary>
+        private static List<BonfireSwitch> PrepareIgnition(List<Vector3> barrels)
+        {
+            var discovery = BonfireDiscovery.Find();
+            var switches = new List<BonfireSwitch>();
+
+            if (discovery.Donor == null)
+            {
+                return switches;
+            }
+
+            foreach (var unlitRoot in discovery.Unlit)
+            {
+                var bonfireSwitch = BonfireIgnition.Prepare(unlitRoot, discovery.Donor);
+                bonfireSwitch.OnLit = () => barrels.Add(bonfireSwitch.transform.position);
+                switches.Add(bonfireSwitch);
+            }
+
+            return switches;
+        }
+
+        /// <summary>
+        /// Keeps each unlit bonfire's Operatable flag in sync with whether the player is
+        /// currently carrying a lighter or matches -- the button is greyed out otherwise.
+        /// A poll, not a per-instance Update(): there are at most a handful of these per map.
+        /// </summary>
+        private static void RefreshIgnitionPrompts(List<BonfireSwitch> unlit)
+        {
+            if (unlit.Count == 0)
+            {
+                return;
+            }
+
+            var inventoryController = Singleton<GameWorld>.Instance?.MainPlayer?.InventoryController;
+            var hasSource = BonfireIgnition.HasIgnitionSource(inventoryController);
+
+            foreach (var bonfireSwitch in unlit)
+            {
+                if (bonfireSwitch == null || bonfireSwitch.Lit)
+                {
+                    continue;
+                }
+
+                bonfireSwitch.Operatable = hasSource;
+            }
         }
     }
 }

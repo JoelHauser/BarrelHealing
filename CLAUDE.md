@@ -12,15 +12,15 @@ which is not the same as it working. The first raid is still the first test.
 
 | | |
 | --- | --- |
-| SPT install | `C:\HUH` (yes, really -- read out of `spt-installer.log`, not a typo) |
+| SPT install | `H:\SPT4.1.X` (moved here from the original `C:\HUH` box; see git history) |
 | SPT version | 4.1.3 |
 | Client | EFT `0.16.9.5.40743`, **Mono**, not IL2CPP |
 | Unity | 2022.3.43f1 |
 | Live game (ignore it) | `C:\Battlestate Games\Escape from Tarkov` -- separate IL2CPP install, useless for modding |
 
 ```
-dotnet build src/BarrelHealing.Client/BarrelHealing.Client.csproj -c Release -p:SPTPath=C:\HUH
-scripts/pack.ps1 -SPTPath C:\HUH     # builds, then copies the DLL into BepInEx/plugins/BarrelHealing
+dotnet build src/BarrelHealing.Client/BarrelHealing.Client.csproj -c Release -p:SPTPath=H:\SPT4.1.X
+scripts/pack.ps1 -SPTPath H:\SPT4.1.X     # builds, then copies the DLL into BepInEx/plugins/BarrelHealing
 ```
 
 **Run those through PowerShell, not Bash.** A backslash path mangled through
@@ -33,9 +33,13 @@ trap as SPT-Casino.
 ```
 BarrelHealingPlugin.cs   BepInPlugin entry, config, starts the heartbeat
 BarrelHeartbeat.cs       waits for a raid, discovers once, polls every 0.5s, drops state at raid end
-BarrelDiscovery.cs       one scene scan, name-matched, logs every hit
+BarrelDiscovery.cs       one scene scan for lit fires, name-matched, logs every hit
 LimbPriority.cs          picks the next limb to heal
 HealingTick.cs           range + line-of-sight gate, delay timer, the Heal() call
+TransformNameMatch.cs    shared ancestor-name-match/dedupe helper (BarrelDiscovery + BonfireDiscovery)
+BonfireDiscovery.cs      v0.2: one scene scan for a lit donor + every unlit bonfire
+BonfireSwitch.cs         v0.2: EFT.Interactive.Switch subclass -- the "Light" prompt itself
+BonfireIgnition.cs       v0.2: collider/prompt setup, fire cloning, lighter/match consumption
 ```
 
 **Polling, not patching.** The raid is noticed by watching
@@ -115,51 +119,89 @@ PowerShell, so it cannot be a loop variable.
 
 ## Where this was left off
 
-v0.1 is built, installed to `C:\HUH\BepInEx\plugins\BarrelHealing`, committed
-and pushed. Untested in a raid.
+v0.1 and v0.2 are both built and installed to
+`H:\SPT4.1.X\BepInEx\plugins\BarrelHealing` (moved here from the original
+`C:\HUH` box). Neither has run in a raid yet.
 
-**Next, and approved but not started: lightable bonfires (v0.2).** Walk up to an
-unlit bonfire, get a **Light** prompt, and light it so it joins the fires that
-heal you. Decisions already made, so they do not need relitigating:
+**v0.2, lightable bonfires, is implemented** -- walk up to an unlit bonfire,
+get a **Light** prompt, light it, and it joins `BarrelHeartbeat`'s healing list
+immediately (no second discovery pass needed; see `BonfireSwitch.OnLit`).
+Decisions from the original spec, kept:
 
-- The button is greyed out unless the player carries a lighter or matches.
-- A player-lit fire **burns you**, like a vanilla one -- so `trigger_hurt_fire`
-  gets cloned along with the three particle children.
-- **Matches are consumed, lighters are not.** Prefer the lighter when the player
-  has both.
-- On a map with no lit bonfire to copy fire from, the prompt does not appear and
-  the log says why.
+- The button is greyed out unless the player carries a lighter or matches
+  (`BarrelHeartbeat.RefreshIgnitionPrompts`, polled every 0.5s, not per-frame).
+- A player-lit fire **burns you**, like a vanilla one -- `trigger_hurt_fire`
+  is cloned along with the three particle children, since `BonfireIgnition`
+  clones everything under the donor except its own `model`/`model_lod`/`shadow`.
+- **Matches are consumed, lighters are not.** Lighter preferred when both carried.
+- On a map with no lit bonfire to copy from, `BonfireDiscovery` finds no donor,
+  no Switch is ever attached, and the log says why.
 
-Ignition items, IDs read from `SPT_Data\database\locales\global\en.json` and
-cross-checked in `templates\items.json`. All are `StackMaxSize = 1`, so
-consuming means removing the whole item, not decrementing a stack:
+### How the "Light" prompt actually works (no Harmony, verified by decompile)
 
-| Item | Template ID | Consumed |
-| --- | --- | --- |
-| Zibbo lighter | `56742c2e4bdc2d95058b456d` | no |
-| Crickent lighter | `56742c284bdc2d98058b456d` | no |
-| Golden Zibbo lighter | `5939a00786f7742fe8132936` | no |
-| SurvL Survivor Lighter | `5e2af37686f774755a234b65` | no |
-| Classic matches | `57347b8b24597737dd42e192` | yes |
-| Hunting matches | `5e2af2bc86f7746d3f3c33fc` | yes |
+EFT's world-interaction system is generic at the raycast layer
+(`EFT.GameWorld.FindInteractable`, called every frame from
+`EFT.Player.InteractionRaycast`) but closed at the prompt-building layer:
+`EFT.InteractionContextHelper.GetAvailableActions` dispatches on concrete type
+with an explicit `is Door / is Trunk / is LootableContainer / is Switch / ...`
+chain and **throws** for anything unrecognised. So `BonfireSwitch` subclasses
+`EFT.Interactive.Switch` (the narrowest recognised type that needs no `Door`
+reference), not `WorldInteractiveObject` directly.
 
-**Do not match on their shared parent category** (`57864e4c24597754843f8723`) --
-it also contains WD-40, propane, thermite and TNT.
+The `Switch` overload of `GetAvailableActions` shows the prompt (text =
+`ContextMenuTip.Localized()`) only when `Operatable` is true and
+`DoorState == EDoorState.Shut` -- both default to "not shown" (`DoorState`
+defaults to `EDoorState.None`) so a runtime-added component has to set them
+explicitly, done in `BonfireSwitch.OnAwake`. Pressing the prompt calls
+`Interact(new InteractionResult(EInteractionType.Open))`, which
+`BonfireSwitch.Interact` overrides completely -- `Switch`'s own
+Open/Close/Lock/Unlock/`NextSwitches`/`Door`/`Lamps` fields are never touched
+and stay null/default harmlessly.
 
-Plumbing for it, all verified to exist:
-`player.InventoryController.Inventory.GetPlayerItems(EPlayerItems.Equipment)`
-to see what is carried, `item.TemplateId.EqualsToString(string)` to identify it,
-and `Object.Instantiate(donorChild, targetRoot, false)` to clone the fire --
-`worldPositionStays: false` keeps each piece's local offset so the flame lands
-in the barrel and not at the world origin. Unlit barrels are found cheaply with
-`FindObjectsOfType<LODGroup>()` (every bonfire root has one, lit or not) filtered
-by name, then split on whether a `ParticleSystem` exists in the subtree.
+`WorldInteractiveObject.OnEnable()` auto-finds its interaction `Collider` by
+scanning children for the first one on `LayersMaskController.DoorLayer`
+(`LayerMask.NameToLayer("DoorLowPolyCollider")`). An unlit bonfire's existing
+colliders are not on that layer, so `BonfireIgnition.Prepare` adds a dedicated
+child `SphereCollider` there, `isTrigger = true` (matches how EFT's own
+loot/interactive colliders work, and `Physics.Raycast` hits triggers by
+default) -- **untested in a raid**, this is the one piece of the mechanism
+that is inference from naming/convention rather than a decompiled guarantee.
+If the prompt never appears on an unlit bonfire, this collider is the first
+thing to check (try `isTrigger = false`, or confirm `DoorLowPolyCollider` is
+actually in `_interactiveLootMaskWPlayer`).
 
-**The one genuinely unsolved piece is consuming the matches.** There is no
-`DestroyItem` on `InventoryController`. The candidate is
-`TryThrowItem(item, callback, silent: true)` -- but a *throw* may spawn a
-pickup-able `LootItem`, which would drop the matchbox at the player's feet
-instead of consuming it. Verify that in a raid before trusting it; the fallback
-is destroying the resulting `LootItem`, or moving consumption to a server route.
+### The matches-consumption question is resolved, and the earlier worry was wrong
+
+`InventoryController.TryThrowItem` does **not** spawn a pickup-able `LootItem`.
+Decompiled directly (`EFT.InventoryLogic.ItemController`, the base every
+`InventoryController` variant in this game inherits from, unoverridden all the
+way down through `PlayerInventoryController`, `PlayerOwnerInventoryController`,
+`SinglePlayerInventoryController`, `OfflineInventoryController`):
+
+```csharp
+public virtual void ThrowItem(Item item, bool downDirection = false, Callback callback = null)
+{
+    OperationResult<DiscardResult> operationResult = ItemManipulator.Discard(item, this, simulate: true);
+    if (operationResult.Failed) { callback?.Invoke(operationResult.ToResult()); }
+    else { Execute(new RemoveOperation(GetAndIncrementNextOperationId(), this, operationResult.Value), callback); }
+}
+```
+
+That's a straight inventory removal (`ItemManipulator.Discard` +
+`RemoveOperation`), the same mechanism used elsewhere in the game for outright
+item destruction -- no physics throw, no world-spawned pickup. The
+hands-visible "throw" players see for grenades/flares is a different system
+entirely. `BonfireIgnition.TryLight` calls
+`inventoryController.TryThrowItem(item, null, true)` directly;
+`silent: true` only suppresses the anti-RMT discard-limit warning notification.
 Whether a client-side removal survives to the stash through SPT's end-of-raid
-profile save is also unverified.
+profile save is still unverified -- that part needs an actual raid.
+
+### Next: the first raid
+
+Nothing left to design -- what's needed now is actually loading into a raid on
+a map with a bonfire (Shoreline and Lighthouse both have several) and checking,
+in order: does the heal-at-a-lit-fire loop from v0.1 work at all; does the
+Light prompt appear on an unlit one; does pressing it clone the fire in a
+sane-looking position; does the newly lit fire then heal; does a match actually
+disappear from inventory and stay gone after raid end.

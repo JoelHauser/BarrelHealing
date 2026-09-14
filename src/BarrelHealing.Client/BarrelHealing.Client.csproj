@@ -7,9 +7,9 @@
     <AssemblyName>BarrelHealing.Client</AssemblyName>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
 
-    <SPTPath Condition="'$(SPTPath)' == ''">C:\HUH</SPTPath>
+    <SPTPath Condition="'$(SPTPath)' == ''">H:\SPT4.1.X</SPTPath>
     <GameManaged>$(SPTPath)\EscapeFromTarkov_Data\Managed</GameManaged>
     <BepInExCore>$(SPTPath)\BepInEx\core</BepInExCore>
 

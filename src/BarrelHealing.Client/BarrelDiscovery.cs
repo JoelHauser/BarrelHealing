@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
@@ -22,8 +21,6 @@ namespace BarrelHealing.Client
     /// </summary>
     internal static class BarrelDiscovery
     {
-        private const int AncestorDepth = 3;
-
         internal static List<Vector3> Find()
         {
             var log = BarrelHealingPlugin.Log;
@@ -58,7 +55,7 @@ namespace BarrelHealing.Client
 
         private static void Consider(Transform transform, Regex pattern, HashSet<Transform> claimed, List<Vector3> found)
         {
-            var match = MatchingAncestor(transform, pattern);
+            var match = TransformNameMatch.MatchingAncestor(transform, pattern);
 
             if (match == null)
             {
@@ -73,36 +70,7 @@ namespace BarrelHealing.Client
             }
 
             found.Add(match.position);
-            BarrelHealingPlugin.Log.LogInfo($"[BarrelHealing]   {PathOf(match)} @ {match.position}");
-        }
-
-        private static Transform MatchingAncestor(Transform transform, Regex pattern)
-        {
-            var current = transform;
-
-            for (var depth = 0; depth <= AncestorDepth && current != null; depth++)
-            {
-                if (pattern.IsMatch(current.name))
-                {
-                    return current;
-                }
-
-                current = current.parent;
-            }
-
-            return null;
-        }
-
-        private static string PathOf(Transform transform)
-        {
-            var path = new StringBuilder(transform.name);
-
-            for (var parent = transform.parent; parent != null; parent = parent.parent)
-            {
-                path.Insert(0, parent.name + "/");
-            }
-
-            return path.ToString();
+            BarrelHealingPlugin.Log.LogInfo($"[BarrelHealing]   {TransformNameMatch.PathOf(match)} @ {match.position}");
         }
     }
 }

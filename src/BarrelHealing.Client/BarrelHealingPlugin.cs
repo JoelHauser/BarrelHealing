@@ -15,7 +15,7 @@ namespace BarrelHealing.Client
     {
         public const string PluginGuid = "com.joelhauser.barrelhealing";
         public const string PluginName = "Barrel Healing";
-        public const string PluginVersion = "0.1.0";
+        public const string PluginVersion = "0.2.0";
 
         internal static ManualLogSource Log;
 
@@ -24,6 +24,9 @@ namespace BarrelHealing.Client
         internal static ConfigEntry<float> HealRatePerSecond;
         internal static ConfigEntry<string> BarrelNamePattern;
         internal static ConfigEntry<int> EnvironmentLayerMask;
+
+        internal static ConfigEntry<string> LightableBarrelNamePattern;
+        internal static ConfigEntry<float> IgnitionColliderRadius;
 
         private void Awake()
         {
@@ -67,6 +70,22 @@ namespace BarrelHealing.Client
                 "Layers the wall check raycasts against, as a bitmask. -1 is every layer, which "
                 + "is deliberately blunt: narrow it once you know which layer the map geometry "
                 + "is actually on.");
+
+            LightableBarrelNamePattern = Config.Bind(
+                "Ignition",
+                "Lightable barrel name pattern",
+                "bonfire",
+                "Case-insensitive regex for which unlit fires get a Light prompt. Deliberately "
+                + "narrower than the healing pattern above: the one 'brazier' prop inspected has "
+                + "no fire/light children and no known lit variant to clone from, so offering a "
+                + "Light prompt there would be a prompt for nothing.");
+
+            IgnitionColliderRadius = Config.Bind(
+                "Ignition",
+                "Ignition collider radius",
+                0.6f,
+                "Radius, in metres, of the interaction collider placed on an unlit bonfire so the "
+                + "vanilla look-and-press prompt has something to raycast against.");
 
             StartCoroutine(BarrelHeartbeat.Run());
 
