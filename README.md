@@ -100,4 +100,4 @@ runtime scene objects, two findings there will save you an evening:
 
 ## Licence
 
-Not yet chosen.
+[MIT](LICENSE).
