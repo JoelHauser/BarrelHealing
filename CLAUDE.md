@@ -295,15 +295,34 @@ It has been deleted now that discovery works, but *re-adding something like it i
 the first move next time this mod "does nothing"* -- it converts silence into
 evidence, which is the entire difficulty here.
 
-### Still unverified
+### v0.2 is known-broken, and the geometry says why
 
-Everything in v0.2. The Light prompt has never been seen in a raid, and it rests
-on assumptions of exactly the kind the four bugs above punished:
+A second AssetRipper pass (2026-09-14) resolved the real prop hierarchies. Full
+detail, including the Shoreline coordinates of every cold bonfire and how to
+regenerate the export, is at the **top of `docs/barrels.md`** -- read that before
+touching `BonfireIgnition`. A private orbitable 3D viewer of the four meshes is
+linked from there.
 
-- **No unlit bonfire has ever been inspected live.** "Unlit props have no fire
-  children at all" comes from the same dev-scene sample that got the names wrong.
-  If cold barrels turn out to carry disabled fire children instead, the lit/cold
-  test is inverted and every cold barrel reads as lit.
+The one piece of good news: **cold detection is sound.** An unlit `bonfire` has
+no `ParticleSystem` in its subtree at all, not even a disabled one, so the
+lit/cold test works. That was the assumption most likely to sink the feature.
+
+The bad news is that **`bonfire` and `barrel_fire` are unrelated props** -- a
+stone-ringed woodpile on the ground versus a waist-height steel drum -- and the
+ignition code assumes they are the same shape:
+
+- **`UnlitBaseChildren` excludes the wrong names.** It skips
+  `model`/`model_lod`/`shadow`, but the drum's non-fire children are
+  `barrel_metal`, `barrel_metal_lod`, `collider`, `shadow_lod`. All four would be
+  cloned, so lighting a woodpile spawns a steel drum mesh and collider on top of
+  it. Fix: allow-list the fire objects instead of blocklisting the rest.
+- **The flame would float 0.52m up**, the drum's rim height, preserved by
+  `worldPositionStays: false` onto a ground-level prop. Fix: zero the Y offset.
+- **The point lights hang off `barrel_metal`**, not off the fire objects, so a
+  naive `barrel_fire_*` allow-list lights the fire without its glow.
+
+Still unverified beyond that:
+
 - **The ignition collider** (`isTrigger = true` on `DoorLowPolyCollider`) is
   inference from naming convention, not a decompiled guarantee. If no prompt
   appears, check this first: try `isTrigger = false`, and confirm that layer is

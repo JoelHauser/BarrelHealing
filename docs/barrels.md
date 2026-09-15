@@ -1,5 +1,111 @@
 # Where the fires actually are, and what they're made of
 
+> **The verified section directly below supersedes everything after it.** The
+> original survey further down was under-sampled and got the prop names wrong;
+> it is kept for its method and its map counts, both still useful, with a
+> correction notice attached.
+
+## Verified prop geometry (2026-09-14, second AssetRipper pass)
+
+A second pass against `H:\SPT4.1.X\EscapeFromTarkov_Data` resolved the prop
+hierarchies properly, by following `m_Components` to each Transform and reading
+child names and local offsets rather than searching by name. Everything in this
+section is read off the real assets.
+
+**There are two unrelated fire props, and this is the crux of the ignition bug.**
+
+| | `bonfire` | `barrel_fire` |
+| --- | --- | --- |
+| What it is | stone ring around a low woodpile, on the ground | steel drum, waist height |
+| State in shipped maps | **unlit** -- this is what gets a Light prompt | **lit** -- this is what heals you today |
+| Children | `model`, `model_lod`, `shadow` | `barrel_metal`, `barrel_metal_lod`, `collider`, `shadow`, `shadow_lod`, `barrel_fire_heat`, `barrel_fire_smoke (1)` |
+| Fire objects | **none, not even disabled** | `barrel_fire_heat`, `barrel_fire_smoke (1)`, both at local `(0.02, 0.52, 0.04)` |
+| Colliders | `Bonfire_COLLIDER`, `Bonfire_BALLISTIC_woodthick`, `Bonfire_stones_COLLIDER`, `Bonfire_stones_BALLISTIC_stone` | `Barrel_fire_COLLIDER`, `Barrel_fire_BALLISTIC_metalthin`, `Barrel_fire_Trigger_hurt_fire` |
+| Root carries | `LODGroup` (confirmed) | `LODGroup` |
+
+`brazier` is a third prop again: `brazier_LOD0`/`LOD1`, `ballistic_set`,
+`collider_set`, `shadow_LOD0`, and no fire/light/particle children in any
+instance inspected. No lit variant has ever been found, which is why
+`LightableBarrelNamePattern` deliberately excludes it.
+
+**What this settles, and what it breaks:**
+
+1. **Cold detection is sound.** An unlit `bonfire` has no `ParticleSystem`
+   anywhere in its subtree, disabled or otherwise, so
+   `GetComponentInChildren<ParticleSystem>(true) == null` really does mean cold.
+   This was the assumption most likely to sink v0.2 and it holds.
+2. **`BonfireIgnition.UnlitBaseChildren` is wrong for the real donor.** It
+   excludes `model`/`model_lod`/`shadow` and clones everything else -- but the
+   drum's non-fire children are `barrel_metal`, `barrel_metal_lod`, `collider`
+   and `shadow_lod`, none of which are on that list. Lighting a woodpile would
+   clone a **whole steel drum mesh and its collider** onto it. The exclusion list
+   was written from `bonfire_withfire`, a dev-scene prop whose children genuinely
+   are `model`/`model_lod`/`shadow`.
+3. **The flame would float.** Both drum fire objects sit `0.52m` up, because that
+   is the drum's rim. Cloned with `worldPositionStays: false` onto a ground-level
+   bonfire, the fire ends up half a metre above the sticks.
+4. **A naive allow-list drops the glow.** Copying only `barrel_fire_*` misses the
+   point lights, which hang off `barrel_metal`, not off the fire objects.
+
+The dev-scene `bonfire_withfire` is worth ignoring as a donor model: its
+`model`/`model_lod`/`shadow` are *disabled*, `barrel_fire_heat` is disabled, and
+its fire children sit at offsets like `(1.38, 0.63, 1.53)` -- over a metre to the
+side. It is a design reference, not a shipped arrangement.
+
+### Unlit bonfire locations on Shoreline
+
+Logged live in a raid by the pre-rewrite build, which attached a Light prompt to
+each. Village and Village_hut_01 are the easiest pair to reach together.
+
+| Scene / parent | X | Y | Z |
+| --- | --- | --- | --- |
+| West — Village | 388.87 | -54.64 | -78.10 |
+| West — Village_hut_01 | 449.48 | -54.52 | 164.05 |
+| West — Outdoor | 48.84 | -21.79 | -122.01 |
+| Sanatorium — Props | -216.06 | -5.13 | -153.30 |
+| Middle — to_middle | -81.41 | -42.40 | 120.67 |
+| North — Outdoor | -418.29 | -20.64 | -252.86 |
+| East — PROPS | -558.44 | -19.11 | -338.77 |
+
+### The 3D reference
+
+The four LOD0 meshes (`Bonfire_LOD0`, `Bonfire_stones_LOD0`, `Barrel_fire_LOD0`,
+`brazier_LOD0`) were exported to GLB and published as a private, orbitable viewer
+alongside these findings:
+
+**https://claude.ai/artifact/T6njQiRch48gVTXE8kSCv6**
+
+That link is private to the repo owner's Claude account; it will not open for
+anyone else. **The extracted meshes are deliberately not committed to this
+repository** -- they are BSG's assets, and shipping ripped game geometry in a
+public repo is a licensing problem no matter how small the file. Regenerate them
+with the recipe below if the viewer is ever needed again.
+
+### Regenerating the geometry export
+
+The mesh export endpoint is not in the original recipe at the bottom of this file:
+
+1. `winget install --id AssetRipper.AssetRipper` (2.0.0)
+2. `AssetRipper.GUI.Free.exe --headless --port 8199`
+3. `POST /LoadFolder` with `path=H:\SPT4.1.X\EscapeFromTarkov_Data` — takes about
+   8 minutes and reads the whole game.
+4. `GET /Search/View?q=Bonfire_LOD0` to find the asset, then
+   `GET /Assets/Model.glb?<the Path query from its View link>` to export it.
+   The GameObject itself 404s — `Model.glb` only accepts Mesh assets, so search
+   for the `*_LOD0` mesh names rather than the prop names.
+5. `GET /Assets/Json?Path=...` walks `m_Components` → Transform → `m_Children`,
+   which is how the hierarchies above were read. `FileID` in a component
+   reference is collection-relative, so cross-collection refs (like a MeshFilter's
+   `m_Mesh`) are easier to resolve by searching the mesh name than by path maths.
+
+Note AssetRipper **normalises vertex bounds on export** — every mesh returns in a
+±1 box, so proportions within a mesh are true but absolute real-world dimensions
+are not recoverable this way.
+
+---
+
+## Original survey (2026, first pass) — see correction
+
 > **Correction, 2026-09-14 — read this before trusting anything below.** The first
 > in-raid test contradicted this document twice.
 >
